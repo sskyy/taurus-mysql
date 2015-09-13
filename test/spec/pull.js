@@ -1,91 +1,63 @@
 var assert = require('assert')
 var co = require('co')
-var mongodb = require('mongodb')
-var MongoClient = mongodb.MongoClient
-var ObjectID = mongodb.ObjectID
+var Taurus = require('../../index.js')
 var _ = require('lodash')
-var util = require('../../lib/util')
-var pull = require('../../lib/collection').pull
-
-var log = require('pretty-log-2').pp
-var printTrackerMap = require('../common/printTrackerMap')
-
-
-function random(arr) {
-  return arr[_.random(0, arr.length - 1)]
-}
+//var util = require('../../lib/util')
+var print = require('pretty-log-2').pp
+var Galaxies = require('roof-zeroql/lib/Galaxies')
+var zeroQL = require('zeroQL')
 
 
-describe('ensureCollection', function () {
-  var database = 'mongodb://localhost:27017/test'
+var taurus = new Taurus({
+  host     : 'localhost',
+  user     : 'root',
+  socketPath  : '/tmp/mysql.sock',
+  database : 'taurus'
+})
+
+var types = [
+  require('../common/types/user'),
+  require('../common/types/todo')
+]
+
+describe('insert ', function () {
 
 
-  it('pull', function (done) {
+  it('pull', function(done){
+    var galaxies = new Galaxies(function( type, requestData ){
+      //console.log( {requestData})
+      return co(function *(){
+        var result = {}
 
-    util.connect(database, function (db) {
-      return co(function*() {
+        for( var i in requestData ){
+          result[i] = yield taurus.pull( requestData[i])
+        }
 
-        //var result = yield (pull({
-        //  type : 'Todo',
-        //  relations : {
-        //    'mentioned_User' : {
-        //      to : {
-        //        type : 'User',
-        //        relations : {}
-        //      }
-        //    }
-        //  }
-        //}))
-
-
-        var result = yield (pull({
-          "type": "Todo",
-          "fields": [
-          "id",
-          "content"
-        ],
-          "attrs": {
-          "data": {
-            _limit : 2,
-
-          },
-          "unfilledKeys": []
-        },
-          "relations": {
-          "mentioned_User": {
-            "name": "mentioned",
-              "to": {
-              "reverse" : false,
-              "type": "User",
-                "fields": [
-                "id",
-                "name"
-              ],
-                "attrs": {
-                "data": {
-                  "_limit" : 1
-                },
-                "unfilledKeys": []
-              },
-              "relations": {},
-              "tracker": "v1"
-            },
-            "static": false
-          }
-        },
-          "tracker": "v0"
-        }))
-
-        //log( result.nodes )
-
-        printTrackerMap(result.trackerRelationMap)
-
-
-        done()
-
+        return result
       })
-    }).catch(done)
 
+    }, types)
 
+    return co(function *(){
+      yield taurus.connect()
+
+      //console.log({test:zeroQL.parse(`User { created Todo {} }`).ast})
+      var result= yield galaxies.sendQuery('test',{test:zeroQL.parse(`User { created Todo {} }`).ast})
+      console.log("-----")
+      print(result.test.get().forEach(function(user){
+        console.log("----------")
+        if( user.getRelative('created')){
+          console.log( user.toObject())
+          console.log(user.getRelative('created').toArray())
+        }
+
+      }))
+
+      yield taurus.end()
+      done()
+    }).catch(function(err){
+      taurus.end()
+      done(err)
+    })
   })
 })

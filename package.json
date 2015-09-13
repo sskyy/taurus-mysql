@@ -1,6 +1,6 @@
 {
-  "name": "taurus-mongo",
-  "version": "0.0.2",
+  "name": "taurus-mysql",
+  "version": "0.0.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -10,6 +10,7 @@
   "license": "MIT",
   "dependencies": {
     "co": "~4.6.0",
-    "mongodb": "~2.0.42"
+    "mongodb": "~2.0.42",
+    "mysql": "^2.9.0"
   }
 }

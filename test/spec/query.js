@@ -16,7 +16,6 @@ describe('ensureCollection', function () {
 
   it('query with relation', function (done) {
 
-
     util.connect(database, function (db) {
       return co(function*() {
 
