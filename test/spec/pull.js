@@ -43,9 +43,7 @@ describe('insert ', function () {
 
       //console.log({test:zeroQL.parse(`User { created Todo {} }`).ast})
       var result= yield galaxies.sendQuery('test',{test:zeroQL.parse(`User { created Todo {} }`).ast})
-      console.log("-----")
       print(result.test.get().forEach(function(user){
-        console.log("----------")
         if( user.getRelative('created')){
           console.log( user.toObject())
           console.log(user.getRelative('created').toArray())

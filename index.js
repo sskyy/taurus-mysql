@@ -6,7 +6,6 @@ var util = require('./lib/util')
 var mysql = require('mysql')
 var co = require('co')
 var _ = require('lodash')
-var print = require('pretty-log-2').pp
 
 
 function createConnection(connectionDef) {
@@ -21,8 +20,8 @@ function createConnection(connectionDef) {
   return connection
 }
 
-function makeRelationTableName(relationKey) {
-  return `${relationKey.from}_${relationKey.name}_${relationKey.to}`
+function makeRelationTableName(relationKey, reverse) {
+  return `${reverse ? relationKey.to : relationKey.from}_${relationKey.name}_${reverse ? relationKey.from : relationKey.to}`
 }
 
 function stringValue(value) {
@@ -36,6 +35,17 @@ function stringValue(value) {
   }
 }
 
+function parseWhereDetail( key, value ){
+  if( typeof value === 'object'){
+    //TODO operator 只能是 like, < , >, >=, <=, between
+    let searchOperator = Object.keys( value ).pop()
+    let searchValue = value[searchOperator]
+    return `${key} ${searchOperator} ${stringValue(searchValue)}`
+  }else{
+    return `${key} = ${stringValue(value)}`
+  }
+}
+
 function parseAstToSqlArgs( ast ){
   var filter = {}
   var where = []
@@ -44,18 +54,21 @@ function parseAstToSqlArgs( ast ){
     if (/^_/.test(key)) {
       filter[key] = value
     } else {
+      //读取 like 等标记
+      //TODO 读取数据的 > < 符号
       if( Object.prototype.toString.call(value) === '[object Array]' ){
-        where.push(`${key} IN (${value.map(v=>stringValue(v))})`)
-      }else{
-        where.push(`${key}=${stringValue(value)}`)
-      }
+        where.push( `(${value.map(v=>parseWhereDetail(key, v)).join(' OR ')})`)
 
+      }else{
+
+        where.push(parseWhereDetail(key, value))
+      }
     }
   }
 
 
-  var fieldsStr = ast.fields.length ? ast.fields.join(',') : '*'
-  var whereStr = where.length ? `WHERE ${where.join('AND')}` : ''
+  var fieldsStr = (ast.fields && ast.fields.length) ? ast.fields.join(',') : '*'
+  var whereStr = where.length ? `WHERE ${where.join(' AND ')}` : ''
   var limitStr = filter._limit ? `LIMIT ${filter._limit}` : ''
   var offsetStr = filter._offset ? `OFFSET ${filter._offset}` : ''
   var orderByStr = filter._orderBy? `ORDER BY ${filter._orderBy}` : ''
@@ -76,10 +89,7 @@ function parseAstToSqlArgs( ast ){
 function Taurus(connectionDef, types, connection) {
   this.types = new RelatedTypes(types)
   this.connection = connection || createConnection(connectionDef)
-  console.log('"aaaaaaaaaaa')
-  console.log( this.types.getRelations('User'))
 }
-
 
 
 
@@ -88,7 +98,6 @@ function Taurus(connectionDef, types, connection) {
 ////////////////////////////////////////////////////////////////////////////////
 //多个节点
 Taurus.prototype.pull = function (ast) {
-  console.log('pulling', ast)
   var that = this
   //不需要结果树
   var result = {
@@ -126,14 +135,6 @@ Taurus.prototype.pull = function (ast) {
       }
 
 
-      //TODO 这是个深度优先遍历，设计一下如何建立相应 result 节点
-      //if( context.dive === true && context.lastRelationStrKey ){
-      //  //Todo 判断是否是数组
-      //  context.resultCursors = context.resultCursors.reduce(function(a, grandNode){
-      //    return a.concat( grandNode[context.lastRelationStrKey] )
-      //  },[])
-      //}
-
       //根节点数据结构不一样
       result.trackerRelationMap[astNode.tracker] = {
         rawRelation: context.relation,
@@ -144,11 +145,8 @@ Taurus.prototype.pull = function (ast) {
       for (var i in trackerNodesCache[context.parent.tracker]) {
         var parentSign = trackerNodesCache[context.parent.tracker][i]
         //开始取当前的 ids
-        //console.log("-=-------")
-        //print( context)
-        var reverse = context.relation.from !== parentSign.type
-        var nodeIds = (yield that.getRelations( parentSign.id, context.relation, reverse))
-          .map( relation=> relation[reverse?'from':'to'])
+        var nodeIds = (yield that.getRelations( parentSign.id, context.relation, context.relation.reverse))
+          .map( relation=> relation[context.relation.reverse?'from':'to'])
 
         if (nodeIds.length === 0) {
           console.log( context.relation.name, 'not in', result.nodes[parentSign.type][parentSign.id])
@@ -187,7 +185,7 @@ Taurus.prototype.pull = function (ast) {
 Taurus.prototype.getRelations = function( parentId, relationKey, reverse){
 
   var that = this
-  var table = makeRelationTableName(relationKey)
+  var table = makeRelationTableName(relationKey, reverse)
   return co(function *(){
     return that.connection.query(`SELECT * FROM ${table} WHERE ${reverse?'`to`':'`from`'}=${parentId}`)
   })
@@ -222,17 +220,18 @@ Taurus.prototype.gerRelatedNodes = function (ast, nodes) {
 //////////////////////////
 //                push
 //////////////////////////
-Taurus.prototype.push = function (ast, rwaNodesToSave, trackerRelationMap) {
+Taurus.prototype.push = function (ast, rawNodesToSave, trackerRelationMap) {
+
   var that = this
   var clientServerIdMap
 
   return co(function *() {
     yield that.connection.beginTransaction()
-    clientServerIdMap = yield that.saveClientNodes(rwaNodesToSave)
+    clientServerIdMap = yield that.saveClientNodes(rawNodesToSave)
     //开始建立关系
     yield util.walkAstAsync(ast, function *(astNode, context) {
       if (astNode === ast) {
-        console.log("root:", trackerRelationMap[astNode.tracker])
+        //console.log("root:", trackerRelationMap[astNode.tracker])
         _.forEach(trackerRelationMap[astNode.tracker], function (node, rawId) {
           if (util.exist(clientServerIdMap, [node.type, rawId])) {
             if (clientServerIdMap[node.type][rawId].trackers === undefined) {
@@ -245,6 +244,8 @@ Taurus.prototype.push = function (ast, rwaNodesToSave, trackerRelationMap) {
       }
 
       var parentRelationMap = trackerRelationMap[astNode.tracker].parentRelationMap
+
+      //console.log('save parent map')
 
       for (let rawParentId in parentRelationMap) {
         let nodeAndProps = parentRelationMap[rawParentId]
@@ -263,7 +264,7 @@ Taurus.prototype.push = function (ast, rwaNodesToSave, trackerRelationMap) {
         }
 
         //建立双向连接
-        console.log("build bi-relation", parentId, nodeAndProps)
+        //console.log("build bi-relation", parentId, nodeAndProps)
         //替换所有的 nodeId
         _.forEach(nodeAndProps, function (nodeAndProp, nodeId) {
           if (util.exist(clientServerIdMap, [nodeAndProp.target.type, nodeId])) {
@@ -308,7 +309,7 @@ function makeClientServerIdMap(rawNodesToSave, nodesToSave, nodesToUpdate) {
 
     return _.mapValues(nodes, function (node, indexId) {
       //顺便填充 nodesToSave 和 nodesToUpdate
-      if (node.id === undefined) {
+      if (!node.id && node.id !==0) {
         nodesToSave[type].clientIds.push(indexId)
         nodesToSave[type].nodes.push(node)
       } else {
@@ -346,7 +347,7 @@ Taurus.prototype.saveClientNodes = function (rawNodesToSave) {
         let fields = util.map(node, function (value, key) {
           return `${key}=${stringValue(value)}`
         }).join(',')
-        console.log('query', `INSERT INTO ${type} SET ${fields}`)
+        //console.log('query', `INSERT INTO ${type} SET ${fields}`)
         var result = yield that.connection.query(`INSERT INTO ${type} SET ${fields}`)
 
         clientServerIdMap[type][clientId] = {data: {id: result.insertId}}
@@ -368,8 +369,8 @@ Taurus.prototype.saveClientNodes = function (rawNodesToSave) {
         let fields = util.map(toUpdateData, function (value, key) {
           return `${key}=${stringValue(value)}`
         }).join(',')
-        console.log('query', `UPDATE  ${type} SET ${fields}`)
 
+        console.log(`UPDATE ${type} SET ${fields} WHERE id=${_id}`)
         yield that.connection.query(`UPDATE ${type} SET ${fields} WHERE id=${_id}`)
 
         clientServerIdMap[type][_id] = {
@@ -387,7 +388,7 @@ Taurus.prototype.saveClientNodes = function (rawNodesToSave) {
 
 
 Taurus.prototype.relateChildren = function (parent, nodeAndProps, relationKey) {
-  console.log('relating', parent, nodeAndProps)
+  //console.log('relating', parent, nodeAndProps)
   var relationTable = makeRelationTableName(relationKey)
   var that = this
   return co(function *() {
@@ -395,8 +396,11 @@ Taurus.prototype.relateChildren = function (parent, nodeAndProps, relationKey) {
       let props = stringValue(nodeAndProps[nodeId].props)
       //TODO property 存在哪里？
       //console.log('node and prop', nodeAndProp)
-      //console.log(`INSERT INTO ${relationTable} (\`from\`,\`to\`, prop) VALUES (${parent.id}, ${nodeId}, '{}')` )
-      yield that.connection.query(`INSERT INTO ${relationTable} (\`from\`,\`to\`, props) VALUES (${parent.id}, ${nodeId}, ${props})`)
+      var reverse = relationKey.to === parent.type
+      var values = reverse ? [nodeId, parent.id] : [parent.id, nodeId]
+      values.push( props)
+      console.log(`INSERT INTO ${relationTable} (\`from\`,\`to\`, props) VALUES (${values.join(',')})`)
+      yield that.connection.query(`INSERT INTO ${relationTable} (\`from\`,\`to\`, props) VALUES (${values.join(',')})`)
     }
   })
 }
@@ -406,18 +410,18 @@ Taurus.prototype.relateChildren = function (parent, nodeAndProps, relationKey) {
 //               destroy
 ////////////////////////////
 Taurus.prototype.destroy = function (type, id) {
-  console.log("tring to destroy", type, id)
+  //console.log("tring to destroy", type, id)
   var that = this
   return co(function *(){
     yield that.connection.beginTransaction()
     yield that.connection.query(`DELETE FROM ${type} WHERE id = ${id}`)
     var relations = that.types.getRelations(type)
-    console.log('relations found====>', relations)
+    //console.log('relations found====>', relations)
     for( let index in relations ){
       let relation = relations[index]
       var tableName = makeRelationTableName(relation.key)
       var indexKey = relation.key.from === type ? '`from`' : '`to`'
-      console.log(`deleting relation DELETE FROM ${tableName} WHERE ${indexKey}=${id}`)
+      //console.log(`deleting relation DELETE FROM ${tableName} WHERE ${indexKey}=${id}`)
       yield that.connection.query(`DELETE FROM ${tableName} WHERE ${indexKey}=${id}`)
 
     }
