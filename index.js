@@ -72,6 +72,7 @@ function parseAstToSqlArgs( ast ){
   var limitStr = filter._limit ? `LIMIT ${filter._limit}` : ''
   var offsetStr = filter._offset ? `OFFSET ${filter._offset}` : ''
   var orderByStr = filter._orderBy? `ORDER BY ${filter._orderBy}` : ''
+  var groupByStr = filter._groupBy? `GROUP BY ${filter._groupBy}` : ''
 
   return {
     fieldsStr,
@@ -79,6 +80,7 @@ function parseAstToSqlArgs( ast ){
     limitStr,
     offsetStr,
     orderByStr,
+    groupByStr
   }
 }
 
@@ -98,6 +100,7 @@ function Taurus(connectionDef, types, connection) {
 ////////////////////////////////////////////////////////////////////////////////
 //多个节点
 Taurus.prototype.pull = function (ast) {
+  //TODO 每个层级的附加信息如何表示，如total!!!!
   var that = this
   //不需要结果树
   var result = {
@@ -199,7 +202,7 @@ Taurus.prototype.getRootNodes = function (ast) {
     var args = parseAstToSqlArgs(ast)
     console.log( `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`)
     return yield that.connection.query(
-      `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`
+      `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`
     )
   })
 }
@@ -211,7 +214,7 @@ Taurus.prototype.gerRelatedNodes = function (ast, nodes) {
     var args = parseAstToSqlArgs(ast)
     console.log( `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`)
     return yield that.connection.query(
-      `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`
+      `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`
     )
   })
 }
@@ -406,6 +409,14 @@ Taurus.prototype.relateChildren = function (parent, nodeAndProps, relationKey) {
 }
 
 
+///////////////////////////
+//              update
+///////////////////////////
+//TODO 批量更新
+
+
+
+
 ////////////////////////////
 //               destroy
 ////////////////////////////
@@ -430,6 +441,8 @@ Taurus.prototype.destroy = function (type, id) {
 
 }
 
+//TODO 批量销毁
+
 ////////////////////////////
 //            connect & end
 ///////////////////////////
@@ -440,5 +453,9 @@ Taurus.prototype.connect = function *() {
 Taurus.prototype.end = function *() {
   return yield this.connection.end()
 }
+
+
+
+
 
 module.exports = Taurus
