@@ -1,4 +1,4 @@
-`JSON:{asdfasdf}`
+
 
 module.exports = {
   type : 'Todo',
