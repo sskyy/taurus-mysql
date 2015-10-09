@@ -59,33 +59,36 @@ function parseAstToSqlArgs(ast) {
     if (/^_/.test(key)) {
       filter[key] = value
     } else {
-      //读取 like 等标记
-      //TODO 读取数据的 > < 符号
       if (Object.prototype.toString.call(value) === '[object Array]' ) {
+        //TODO 读取数据的 > < 符号
         if(value.length !== 0) where.push(`(${value.map(v=>parseWhereDetail(key, v)).join(' OR ')})`)
-
       } else {
         where.push(parseWhereDetail(key, value))
       }
     }
   }
 
+  //TODO 强制带上 id 的逻辑 放到别的地方更合理。
+  if( ast.fields && ast.fields.indexOf('id') === -1 ) ast.fields.push('id')
 
   var fieldsStr = (ast.fields && ast.fields.length) ? ast.fields.join(',') : '*'
   var whereStr = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  var limitStr = filter._limit ? `LIMIT ${filter._limit}` : ''
-  var offsetStr = filter._offset ? `OFFSET ${filter._offset}` : ''
   var orderByStr = filter._orderBy ? `ORDER BY ${filter._orderBy}` : ''
   var groupByStr = filter._groupBy ? `GROUP BY ${filter._groupBy}` : ''
+  var limitStr = ''
+  if( filter._limit ){
+    limitStr = filter._offset ? `LIMIT ${filter._offset},${filter._limit}` :`LIMIT ${filter._limit}`
+  }
 
   return {
     fieldsStr,
     whereStr,
     limitStr,
-    offsetStr,
     orderByStr,
     groupByStr,
-    total: filter._total !== undefined
+    total: filter._total !== undefined,
+    limit : filter._limit,
+    offset : filter._offset
   }
 }
 
@@ -131,7 +134,9 @@ Taurus.prototype.pull = function (ast) {
             //ast 上只要存 sign 就够了
             return {type: astNode.type, id: node.id}
           }),
-          total: queryResult.total
+          total: queryResult.total,
+          limit : queryResult.limit,
+          offset: queryResult.offset
         }
 
 
@@ -158,21 +163,23 @@ Taurus.prototype.pull = function (ast) {
         log('parentIds', parentIds)
       }
 
-
-      let queryResult =yield that.gerRelatedNodes(astNode, parentIds, context.relation)
-      console.log("=>>>>>astNode.type")
-      print( queryResult)
-      astNode.data = _.mapValues( queryResult, nodeData=>{
+      if( parentIds.length !== 0 ){
+        let queryResult =yield that.gerRelatedNodes(astNode, parentIds, context.relation)
+        console.log("=>>>>>astNode.type")
+        print( queryResult)
+        astNode.data = _.mapValues( queryResult, nodeData=>{
           //ast 上只要存 sign 就够了
 
-          return {nodes:_.mapValues(nodeData.nodes, node=>{
-            console.log('saving', astNode.type, node.id)
-            result.nodes[astNode.type][node.id] = node
-            return {type: astNode.type, id: node.id}
-          }),total:nodeData.total}
-
+          return {
+            nodes:_.mapValues(nodeData.nodes, node=>{
+              result.nodes[astNode.type][node.id] = node
+              return {type: astNode.type, id: node.id}
+            }),
+            total:nodeData.total,
+            limit : nodeData.limit
+          }
         })
-
+      }
     })
 
     log('pull result')
@@ -220,10 +227,10 @@ Taurus.prototype.getRootNodes = function (ast) {
   var that = this
   return co(function*() {
     var args = parseAstToSqlArgs(ast)
-    console.log(`SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`)
+    console.log(`SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.limitStr} `)
     var result = {
       nodes: _.indexBy(yield that.connection.query(
-        `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`
+        `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr}  ${args.orderByStr} ${args.groupByStr} ${args.limitStr} `
       ),'id')
     }
 
@@ -232,6 +239,13 @@ Taurus.prototype.getRootNodes = function (ast) {
         `SELECT count(*) AS count FROM ${ast.type} ${args.whereStr}`
       ))[0].count
     }
+
+    if( args.limit ){
+      result.limit = args.limit
+    }
+
+    result.offset = args.offset || 0
+
     return result
 
   })
@@ -248,16 +262,16 @@ Taurus.prototype.gerRelatedNodes = function (ast, parentIds, relation) {
       return {nodes: nodes}
     })
 
-    //看看试一次读出来，还是分多次读
+    //看看是一次读出来，还是分多次读
 
     if (ast.attrs.data._total) {
       //必须分多次读
       for (let parentId in resultMap) {
         ast.attrs.data.id = Object.keys(resultMap[parentId].nodes)
         let args = parseAstToSqlArgs(ast)
-        console.log( `==>SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`)
+        console.log( `==>SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.groupByStr} ${args.limitStr} `)
         let nodeRecords = yield that.connection.query(
-          `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`
+          `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.groupByStr} ${args.limitStr} `
         )
         console.log('query count', `SELECT count(*) AS count FROM ${ast.type} ${args.whereStr} `)
         let total = (yield that.connection.query(
@@ -266,7 +280,11 @@ Taurus.prototype.gerRelatedNodes = function (ast, parentIds, relation) {
 
         resultMap[parentId].nodes = _.indexBy(nodeRecords,'id')
         resultMap[parentId].total = total
+        resultMap[parentId].limit = args.limit
+        resultMap[parentId].offset= args.offset || 0
       }
+
+
 
     } else {
       //可以一次全读出来
@@ -274,15 +292,17 @@ Taurus.prototype.gerRelatedNodes = function (ast, parentIds, relation) {
         return resultIds.concat(ids)
       }, [])
       let args = parseAstToSqlArgs(ast)
-      console.log(`SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr}`)
+      console.log(`SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.limitStr} `)
       let nodeRecords = _.indexBy(yield that.connection.query(
-        `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.limitStr} ${args.offsetStr} ${args.orderByStr} ${args.groupByStr}`
+        `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.groupByStr} ${args.limitStr} `
       ), 'id')
 
       _.forEach(resultMap, nodeResult=> {
         //不记录 total 信息
         nodeResult.total = null
         nodeResult.nodes = _.indexBy(_.compact(nodeResult.nodes.map(nodeId=>nodeRecords[nodeId])),'id')
+        nodeResult.limit = args.limit
+        nodeResult.offset = args.offset || 0
       })
     }
 
