@@ -129,7 +129,7 @@ Taurus.prototype.pull = function (ast) {
         //TODO 允许混合类型的type
         let queryResult = yield that.getRootNodes(astNode)
         astNode.data = {
-          nodes: _.mapValues(queryResult.nodes,node=> {
+          nodes: _.map(queryResult.nodes,node=> {
             result.nodes[astNode.type][node.id] = node
             //ast 上只要存 sign 就够了
             return {type: astNode.type, id: node.id}
@@ -147,7 +147,7 @@ Taurus.prototype.pull = function (ast) {
       var parentIds = []
       if (context.parent === result.ast) {
         //如果父节点就是根
-        parentIds = Object.keys(context.parent.data.nodes)
+        parentIds = context.parent.data.nodes.map(node=>node.id)
         log("parentid from root", parentIds)
       } else {
         /*
@@ -229,9 +229,9 @@ Taurus.prototype.getRootNodes = function (ast) {
     var args = parseAstToSqlArgs(ast)
     console.log(`SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr} ${args.orderByStr} ${args.limitStr} `)
     var result = {
-      nodes: _.indexBy(yield that.connection.query(
+      nodes: yield that.connection.query(
         `SELECT ${args.fieldsStr} FROM ${ast.type} ${args.whereStr}  ${args.orderByStr} ${args.groupByStr} ${args.limitStr} `
-      ),'id')
+      )
     }
 
     if (args.total) {
