@@ -97,9 +97,17 @@ function parseAstToSqlArgs(ast) {
 //            Taurus
 /////////////////////////
 function Taurus(connectionDef, types, connection) {
-  this.types = new RelatedTypes(types)
-  this.connection = connection || createConnection(connectionDef)
+  this.connectionDef = _.cloneDeep(connectionDef)
+  this.types = _.cloneDeep(types)
+  this.connection = connection
 }
+
+Taurus.prototype.bootstrap  = function (){
+  return this.ensureDatabase( this.connectionDef, this.types ).then(()=>{
+    this.connection = this.connection || createConnection(this.connectionDef)
+  })
+}
+
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -148,7 +156,6 @@ Taurus.prototype.pull = function (ast) {
       if (context.parent === result.ast) {
         //如果父节点就是根
         parentIds = context.parent.data.nodes.map(node=>node.id)
-        log("parentid from root", parentIds)
       } else {
         /*
          data:{
@@ -160,13 +167,12 @@ Taurus.prototype.pull = function (ast) {
         parentIds = _.reduce(context.parent.data, (result, nodesData)=> {
           return result.concat(Object.keys(nodesData.nodes))
         }, [])
-        log('parentIds', parentIds)
+        //log('parentIds', parentIds)
       }
 
       if( parentIds.length !== 0 ){
         let queryResult =yield that.gerRelatedNodes(astNode, parentIds, context.relation)
-        console.log("=>>>>>astNode.type")
-        print( queryResult)
+        //print( queryResult)
         astNode.data = _.mapValues( queryResult, nodeData=>{
           //ast 上只要存 sign 就够了
 
@@ -182,8 +188,6 @@ Taurus.prototype.pull = function (ast) {
       }
     })
 
-    log('pull result')
-    print(result)
     return result
   })
 
@@ -535,6 +539,7 @@ Taurus.prototype.destroy = function (type, id) {
 
 //TODO 批量销毁
 
+
 ////////////////////////////
 //            connect & end
 ///////////////////////////
@@ -544,6 +549,102 @@ Taurus.prototype.connect = function *() {
 
 Taurus.prototype.end = function *() {
   return yield this.connection.end()
+}
+
+/////////////////////////////
+//            build & alter
+/////////////////////////////
+
+function buildColumn( fieldDef, fieldName  ){
+  var defaultFieldSize = {
+    //'INT' : 255,
+    'CHAR' : 128,
+    'VARCHAR' : 255,
+    'TEXT' : 1024,
+    'OTHER' : 255
+  }
+
+
+  if( typeof fieldDef === 'string') fieldDef = {type : fieldDef}
+
+  fieldDef.size = defaultFieldSize[fieldDef.type.toUpperCase()] ?
+    defaultFieldSize[fieldDef.type.toUpperCase()] :
+    defaultFieldSize.OTHER
+
+  //TODO ENUM / AUTO_INCREASE / UNIQUE
+  return `${fieldName} `+
+    `${fieldDef.type}(${fieldDef.size}) ` +
+    `${fieldDef.allowNull||'NOT NULL'} `+
+    `${fieldDef.defaultValue?`DEFAULT ${fieldDef.defaultValue}`:''}`
+}
+
+Taurus.prototype.ensureDatabase = function ( connectionDef, types ){
+  connectionDef.database = connectionDef.database || 'taurus'
+
+  var tmpConnectionDef = _.clone(connectionDef)
+  delete tmpConnectionDef.database
+
+  var tmpConnection = createConnection(tmpConnectionDef)
+
+
+  return co(function *(){
+    yield tmpConnection.beginTransaction()
+    //ensure database exist
+    var databases = _.map(yield tmpConnection.query('SHOW DATABASES'),p=>p['Database'])
+    console.log( 11111,databases )
+    if( databases.indexOf( connectionDef.database) === -1 ){
+      yield tmpConnection.query(`CREATE DATABASES ${connectionDef.database}`)
+    }
+    yield tmpConnection.query(`USE ${connectionDef.database}`)
+
+    var tables = _.map(yield tmpConnection.query('SHOW TABLES'),p=>p[`Tables_in_${connectionDef.database}`])
+
+    //ensure tables exist
+    for( let type of types ){
+      console.log( 'building type', type)
+      if( tables.indexOf( type.type) === -1 ){
+        //build table
+        console.log( `CREATE TABLE ${type.type}(
+        \`id\` int(11) unsigned NOT NULL AUTO_INCREMENT,
+        ${_.map(type.fields,buildColumn).join(',')}
+      )`)
+
+        yield tmpConnection.query(`CREATE TABLE ${type.type}(
+        \`id\` int(11) unsigned NOT NULL AUTO_INCREMENT,
+        ${_.map(type.fields,buildColumn).join(',')},
+        PRIMARY KEY (\`id\`)
+      )`)
+
+        //create relation table
+        if( type.relations ){
+          for( let relation of type.relations){
+            let relationKey = _.extend({}, relation, {from:type.type})
+            console.log(`CREATE TABLE ${makeRelationTableName(relationKey)}(
+              \`id\` int(11) unsigned NOT NULL AUTO_INCREMENT,
+              \`from\` INT(11) NOT NULL,
+              \`to\` INT(11) NOT NULL,
+              \`props\` VARCHAR(1024),
+              PRIMARY KEY (\`id\`)
+              )`)
+            yield tmpConnection.query(`CREATE TABLE ${makeRelationTableName(relationKey)}(
+              \`id\` int(11) unsigned NOT NULL AUTO_INCREMENT,
+              \`from\` INT(11) NOT NULL,
+              \`to\` INT(11) NOT NULL,
+              \`props\` VARCHAR(1024),
+              PRIMARY KEY (\`id\`)
+              )`)
+
+          }
+        }
+      }else{
+        //TODO check table columns
+      }
+    }
+    yield tmpConnection.commit()
+
+  })
+
+
 }
 
 
