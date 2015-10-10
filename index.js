@@ -641,7 +641,7 @@ Taurus.prototype.ensureDatabase = function ( connectionDef, types ){
       }
     }
     yield tmpConnection.commit()
-
+    yield tmpConnection.end()
   })
 
 
