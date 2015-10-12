@@ -1,6 +1,5 @@
 'use strict'
 
-var RelatedTypes = require('roof-zeroql/lib/RelatedTypes')
 var util = require('./lib/util')
 var mysql = require('mysql')
 var co = require('co')
