@@ -571,7 +571,7 @@ function buildColumn( fieldDef, fieldName  ){
     defaultFieldSize.OTHER
 
   //TODO ENUM / AUTO_INCREASE / UNIQUE
-  return `${fieldName} `+
+  return `\`${fieldName}\` `+
     `${fieldDef.type}(${fieldDef.size}) ` +
     `${fieldDef.allowNull||'NOT NULL'} `+
     `${fieldDef.defaultValue?`DEFAULT ${fieldDef.defaultValue}`:''}`
@@ -592,7 +592,7 @@ Taurus.prototype.ensureDatabase = function ( connectionDef, types ){
     var databases = _.map(yield tmpConnection.query('SHOW DATABASES'),p=>p['Database'])
     console.log( 11111,databases )
     if( databases.indexOf( connectionDef.database) === -1 ){
-      yield tmpConnection.query(`CREATE DATABASES ${connectionDef.database}`)
+      yield tmpConnection.query(`CREATE DATABASE ${connectionDef.database}`)
     }
     yield tmpConnection.query(`USE ${connectionDef.database}`)
 
